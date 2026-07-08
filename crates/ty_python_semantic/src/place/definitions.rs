@@ -42,7 +42,6 @@ pub struct DefinitionResolution<'db> {
     is_complete: bool,
 }
 
-#[allow(dead_code, reason = "awaiting IDE integration")]
 impl<'db> DefinitionResolution<'db> {
     pub(crate) fn new() -> Self {
         Self {
