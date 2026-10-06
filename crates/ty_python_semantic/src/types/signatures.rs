@@ -1599,8 +1599,12 @@ impl<'db> Signature<'db> {
 
         let mut builder = SpecializationBuilder::new(db, env, &constraints, generic_context);
         builder.add_constraint_set(when).ok()?;
-        let concrete_class_receiver =
-            matches!(receiver_type, Type::ClassLiteral(_) | Type::GenericAlias(_));
+        let concrete_class = match receiver_type {
+            Type::ClassLiteral(class) => Some(class),
+            Type::GenericAlias(alias) => Some(alias.origin(db).into()),
+            _ => None,
+        };
+        let concrete_class_receiver = concrete_class.is_some_and(|class| !class.is_protocol(db));
         let callable_receiver = generic_context
             .variables(db)
             .any(|typevar| typevar.is_paramspec(db))
