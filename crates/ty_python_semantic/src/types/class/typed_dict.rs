@@ -24,8 +24,8 @@ use crate::types::typed_dict::{
 };
 use crate::types::{
     BoundTypeVarInstance, CallableType, ClassBase, ClassLiteral, ClassType, IntersectionBuilder,
-    KnownClass, MemberLookupPolicy, SelfTypeVarOrigin, Type, TypeContext, TypeMapping, TypeVarVariance,
-    TypedDictType, TypingModule, UnionType, determine_self_class,
+    KnownClass, MemberLookupPolicy, SelfTypeVarOrigin, Type, TypeContext, TypeMapping,
+    TypeVarVariance, TypedDictType, TypingModule, UnionType, determine_self_class,
 };
 use crate::{Db, FxIndexMap};
 use ty_python_core::definition::Definition;
