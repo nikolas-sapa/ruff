@@ -265,6 +265,59 @@ fn benchmark_many_upper_bound_callbacks(criterion: &mut Criterion) {
     });
 }
 
+/// Each generic protocol member has several possible specializations, none of which constrain
+/// the protocol's class argument. Avoid enumerating combinations of these independent witnesses.
+fn benchmark_independent_generic_protocol_members(criterion: &mut Criterion) {
+    const NUM_MEMBERS: usize = 8;
+
+    setup_rayon();
+
+    let mut code = String::from(
+        "\
+from typing import Protocol
+
+def factory[T]() -> tuple[T, T]:
+    raise NotImplementedError
+
+type Result = tuple[int, int] | tuple[str, str] | tuple[bytes, bytes] | tuple[None, None]
+
+class Required[R](Protocol):
+    value: R
+",
+    );
+    for i in 0..NUM_MEMBERS {
+        writeln!(
+            &mut code,
+            "    @staticmethod\n    def member{i}() -> Result: ..."
+        )
+        .ok();
+    }
+    code.push_str("\nclass Implementation:\n    value = 1\n");
+    for i in 0..NUM_MEMBERS {
+        writeln!(&mut code, "    member{i} = staticmethod(factory)").ok();
+    }
+    code.push_str(
+        "\n\
+def infer[R](value: Required[R]) -> R:
+    return value.value
+
+infer(Implementation())
+",
+    );
+
+    criterion.bench_function("ty_micro[independent_generic_protocol_members]", |b| {
+        b.iter_batched_ref(
+            || setup_micro_case(&code),
+            |case| {
+                let Case { db } = case;
+                let result = db.check();
+                assert_eq!(result.len(), 0);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 fn benchmark_pandas_tdd(criterion: &mut Criterion) {
     setup_rayon();
     let venv_path = setup_micro_case_venv("pandas_tdd", &["pandas-stubs"]);
@@ -757,6 +810,7 @@ criterion_group!(
     benchmark_bottom_and_top_signature_comparisons,
     benchmark_factored_upper_bounds,
     benchmark_many_upper_bound_callbacks,
+    benchmark_independent_generic_protocol_members,
     benchmark_pandas_tdd,
     benchmark_mixed_typed_dict_union_copy,
     benchmark_missing_key_typed_dict_union_copy,
