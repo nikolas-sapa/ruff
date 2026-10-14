@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use compact_str::CompactString;
 use ruff_db::PythonFile;
 use ruff_db::files::{File, FilePath};
@@ -16,7 +18,7 @@ use ty_module_resolver::{
 };
 
 use crate::Db;
-use crate::place::definitions::DefinitionResolution;
+use crate::place::definitions::{DefinitionResolution, definitions_for_module_global};
 use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::place::{
     builtins_module_scope, class_body_implicit_symbol, implicit_builtins_symbol_scope,
@@ -29,17 +31,18 @@ use crate::place_load::{
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, ProgramEnvironment, SpecialFormType, Type, TypeQualifiers, binding_type,
-    infer_complete_scope_types, infer_definition_types, inferred_declaration,
-    is_discarded_dict_key_assignment,
+    CycleDetector, ProgramEnvironment, ReachingDefinitionsByExpression, SpecialFormType, Type,
+    TypeQualifiers, binding_type, infer_complete_scope_types, infer_definition_types,
+    inferred_declaration, is_discarded_dict_key_assignment, reaching_definitions_for_scope,
+    scope_for_complete_type_inference,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place::PlaceExpr;
 use ty_python_core::place_table;
-use ty_python_core::scope::{FileScopeId, Scope};
+use ty_python_core::scope::{FileScopeId, Scope, ScopeId};
 use ty_python_core::semantic_index;
 use ty_python_core::symbol::Symbol;
-use ty_python_core::{BindingWithConstraintsIterator, Program, ProgramFile};
+use ty_python_core::{BindingWithConstraintsIterator, ExpressionNodeKey, Program, ProgramFile};
 
 /// The primary interface the LSP should use for querying semantic information about a [`File`].
 ///
@@ -461,6 +464,56 @@ impl<'db> SemanticModel<'db> {
         self.scope(node)
             .into_iter()
             .flat_map(move |scope| index.ancestor_scopes(scope))
+    }
+
+    /// Returns the definitions that may reach a name expression.
+    ///
+    /// Pass a `cache` to reuse reaching definitions across calls for names
+    /// within the same scope. Without a cache, reaching definitions are
+    /// computed afresh for the entire scope on each call.
+    ///
+    /// The result borrows from the cache when one is provided and is owned otherwise.
+    ///
+    /// Returns `None` if inference did not visit the name (e.g., `factory` in
+    /// the invalid string annotation `x: "factory()"`).
+    #[allow(dead_code, reason = "awaiting IDE integration")]
+    pub fn reaching_definitions<'cache>(
+        &self,
+        name: &ast::ExprName,
+        cache: Option<&'cache mut FxHashMap<ScopeId<'db>, ReachingDefinitionsByExpression<'db>>>,
+    ) -> Option<Cow<'cache, DefinitionResolution<'db>>> {
+        let scope = self
+            .scope(name.into())?
+            .to_scope_id(self.db(), self.program_file());
+
+        let key: ExpressionNodeKey = ast::ExprRef::Name(name).into();
+
+        let Some(cache) = cache else {
+            return reaching_definitions_for_scope(self.db(), scope)
+                .remove(&key)
+                .map(Cow::Owned);
+        };
+
+        let scope = scope_for_complete_type_inference(self.db(), scope);
+
+        cache
+            .entry(scope)
+            .or_insert_with(|| reaching_definitions_for_scope(self.db(), scope))
+            .get(&key)
+            .map(Cow::Borrowed)
+    }
+
+    /// Returns the definitions that may supply a module global at the end of its scope.
+    ///
+    /// Returns `None` if the module has no file or the name has no symbol-table entry.
+    #[allow(dead_code, reason = "awaiting IDE integration")]
+    pub fn definitions_for_module_global(
+        &self,
+        module: Module<'db>,
+        name: &str,
+    ) -> Option<DefinitionResolution<'db>> {
+        let file = ProgramFile::new(self.db(), module.file(self.db())?, self.program());
+        definitions_for_module_global(self.db(), file, name)
     }
 
     /// Returns the first local definition created by `covering_node`, if any.
@@ -1190,10 +1243,14 @@ impl HasType for ast::ExceptHandlerExceptHandler {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use crate::db::tests::TestDbBuilder;
     use crate::{HasType, SemanticModel};
     use ruff_db::files::system_path_to_file;
     use ruff_db::parsed::parsed_module;
+    use ruff_python_trivia::textwrap::dedent;
+    use rustc_hash::FxHashMap;
     use ty_python_core::ProgramFile;
 
     #[test]
@@ -1254,6 +1311,53 @@ mod tests {
         let ty = alias.inferred_type(&model).unwrap();
 
         assert!(ty.is_class_literal());
+
+        Ok(())
+    }
+
+    #[test]
+    fn reaching_definitions_borrow_cached_results() -> anyhow::Result<()> {
+        let source = dedent(
+            "
+            value = 1
+            value
+            value
+            ",
+        );
+        let db = TestDbBuilder::new()
+            .with_file("/src/foo.py", &source)
+            .build()?;
+        let file = system_path_to_file(&db, "/src/foo.py").unwrap();
+        let file = ProgramFile::new(&db, file, db.program_environment().program(&db));
+        let ast = parsed_module(&db, file.python_file(&db)).load(&db);
+        let first = ast.suite()[1]
+            .as_expr_stmt()
+            .unwrap()
+            .value
+            .as_name_expr()
+            .unwrap();
+        let second = ast.suite()[2]
+            .as_expr_stmt()
+            .unwrap()
+            .value
+            .as_name_expr()
+            .unwrap();
+        let model = SemanticModel::new(&db, file);
+
+        let uncached = model.reaching_definitions(first, None).unwrap();
+        assert!(matches!(&uncached, Cow::Owned(_)));
+        assert_eq!(uncached.definitions().len(), 1);
+
+        let mut cache = FxHashMap::default();
+        let cached = model.reaching_definitions(first, Some(&mut cache)).unwrap();
+        assert!(matches!(&cached, Cow::Borrowed(_)));
+        assert_eq!(cached.as_ref(), uncached.as_ref());
+
+        let cached_again = model
+            .reaching_definitions(second, Some(&mut cache))
+            .unwrap();
+        assert!(matches!(&cached_again, Cow::Borrowed(_)));
+        assert_eq!(cached_again.as_ref(), uncached.as_ref());
 
         Ok(())
     }
