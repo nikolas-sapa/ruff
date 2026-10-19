@@ -2099,7 +2099,7 @@ pub enum Type<'db> {
 
 /// A captured parameter list, another `ParamSpec`, or a combination of those values.
 ///
-/// Use [`Type::as_paramspec_value`] to validate callable kinds, whole ParamSpec references,
+/// Use [`Type::as_paramspec_value`] to validate callable kinds, whole `ParamSpec` references,
 /// and the members of unions and positive-only intersections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ParamSpecValue<'db> {
@@ -2110,7 +2110,7 @@ enum ParamSpecValue<'db> {
 }
 
 impl<'db> ParamSpecValue<'db> {
-    /// Maps captured lists and ParamSpec references, retaining their union or intersection.
+    /// Maps captured lists and `ParamSpec` references, retaining their union or intersection.
     fn try_map(
         self,
         db: &'db dyn Db,
