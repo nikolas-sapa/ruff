@@ -327,5 +327,28 @@ help: Combine `if` statements using `and`
     -             d
 165 +     elif b and c:
 166 +         d
+167 |
+    |
+note: This is an unsafe fix and may change runtime behavior
+
+SIM102 [*] Use a single `if` statement instead of nested `if` statements
+   --> SIM102.py:175:5
+    |
+173 |           print("a")
+174 |           print("b")
+175 | /     elif c:
+176 | |         if d:
+    | |_____________^
+177 |               print("d")
+    |
+help: Combine `if` statements using `and`
+    |
+174 |         print("b")
+    -     elif c:
+    -         if d:
+    -             print("d")
+175 +     elif c and d:
+176 +         print("d")
+177 |
     |
 note: This is an unsafe fix and may change runtime behavior

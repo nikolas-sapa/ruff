@@ -165,3 +165,14 @@ def f():
     elif b:
         if c:
             d
+
+
+# SIM102
+def f():
+    if a:
+        print("a")
+        print("b")
+    elif c:
+        if d:
+            print("d")
+
